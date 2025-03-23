@@ -4,8 +4,9 @@ import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import roomRoutes from "./routes/room.js";
 import authRoutes from "./routes/auth.js";
+import paymentRoutes from "./routes/payment.js";
+import webhookRoutes from "./routes/webhook.js";
 import db from "./db.js";
-
 dotenv.config();
 
 const app = express();
@@ -49,6 +50,8 @@ app.use((req, res, next) => {
 
 app.use("/api/v1/room", roomRoutes);
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/payment", paymentRoutes);
+app.use("/api/v1/webhook", webhookRoutes);
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

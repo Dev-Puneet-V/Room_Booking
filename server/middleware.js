@@ -53,3 +53,28 @@ export const isEmployee = (req, res, next) => {
     res.status(error.status || 500).json({ message: error.message });
   }
 };
+
+export const isGuest = (req, res, next) => {
+  try {
+    const token = req.cookies.token;
+    const decodedUser = verifyToken(token);
+    const { id } = decodedUser;
+    if (!id) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const query = `SELECT * FROM guest WHERE id = ?;`;
+    const values = [id];
+    db.query(query, values, (err, result) => {
+      if (err) {
+        return res.status(500).json({ message: err.message });
+      }
+      if (result.length === 0) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      req.user = result[0];
+      next();
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message });
+  }
+};
