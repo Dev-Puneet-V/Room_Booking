@@ -10,7 +10,7 @@ const router = express.Router();
 const releaseExpiredLocks = async (connection) => {
   try {
     // Release locks that have expired and are not for occupied rooms
-    await connection.query(
+    await db.query(
       `UPDATE room 
        SET lock_until = NULL, status = CASE 
          WHEN status = 'Under maintenance' THEN 'Empty'
@@ -158,7 +158,7 @@ router.post("/:roomNumber/view", isGuest, async (req, res) => {
     const { roomNumber } = req.params;
     const guest = req.user;
     //check if room is empty and not locked by other guest
-    const query1 = `SELECT * FROM room WHERE number = ? AND status = 'Empty' AND (lock_until IS NULL OR lock_until < NOW() OR viewer_user_id = ?)`;
+    const query1 = `SELECT * FROM room WHERE number = ? AND status = 'Empty' AND (lock_until IS NULL OR (lock_until > NOW() AND viewer_user_id = ?) OR lock_until < NOW())`;
     const values = [roomNumber, guest.id];
     db.query(query1, values, (err, result) => {
       if (err) {
@@ -167,7 +167,17 @@ router.post("/:roomNumber/view", isGuest, async (req, res) => {
       if (result.length === 0) {
         return res.status(404).json({ message: "Room not found" });
       }
-      if (result[0]?.viewer_user_id === guest?.id) {
+
+      console.log(
+        new Date(result[0]?.lock_until).getTime() < Date.now(),
+        new Date(result[0]?.lock_until).getTime(),
+        Date.now()
+      );
+      if (
+        result[0]?.viewer_user_id === guest?.id &&
+        result[0]?.status === "Empty" &&
+        new Date(result[0]?.lock_until).getTime() > Date.now()
+      ) {
         return res.status(200).json({
           message: "Room found and locked",
           data: {
@@ -202,31 +212,156 @@ router.post("/:roomNumber/view", isGuest, async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 });
-
-router
-  .patch("/:roomNumber/unlock", isGuest, async (req, res) => {
-    try {
-      const { roomNumber } = req.params;
-      const guest = req.user;
-      console.log(guest);
-      const updateQuery = `UPDATE room SET lock_until = NULL, viewer_user_id = NULL WHERE number = ? AND viewer_user_id = ?`;
-      db.query(updateQuery, [roomNumber, guest.id], (err, result) => {
-        if (err) return res.status(500).json({ message: err.message });
-        if (result.affectedRows === 0)
-          return res
-            .status(404)
-            .json({ message: "Room not found or not locked by the guest" });
-        return res.status(200).json({ message: "Room unlocked successfully" });
-      });
-    } catch (error) {
-      return res.status(500).json({ message: error.message });
-    }
-  })
-  // 3. Initiate Booking/Payment Endpoint (15-minute lock)
-  .post("/:roomNumber/book", async (req, res) => {
+//user comes -> views the room -> click on book now(check if room is available) -> if available then lock the room for 15 minutes -> if not available then return not available
+//
+router.patch("/:roomNumber/unlock", isGuest, async (req, res) => {
+  try {
     const { roomNumber } = req.params;
-    const { guest_id, from_date, days, amount } = req.body;
-    const selectQuery = ``;
-  });
+    const guest = req.user;
+    const updateQuery = `UPDATE room SET lock_until = NULL, viewer_user_id = NULL WHERE number = ? AND viewer_user_id = ?`;
+    db.query(updateQuery, [roomNumber, guest.id], (err, result) => {
+      if (err) return res.status(500).json({ message: err.message });
+      if (result.affectedRows === 0)
+        return res
+          .status(404)
+          .json({ message: "Room not found or not locked by the guest" });
+      return res.status(200).json({ message: "Room unlocked successfully" });
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+// 3. Initiate Booking/Payment Endpoint (15-minute lock)
+router.post("/:roomNumber/book", isGuest, async (req, res) => {
+  const { roomNumber } = req.params;
+  const guest = req.user;
+  const { from_date, days } = req.body;
+
+  if (!from_date || !days) {
+    return res.status(400).json({
+      message:
+        "Missing required fields: from_date, days, and amount are required",
+    });
+  }
+
+  // Calculate end_date
+  let end_date = new Date(from_date);
+  end_date.setDate(end_date.getDate() + parseInt(days));
+  // end_date = end_date.toISOString().slice(0, 19).replace("T", " ");
+  const connection = await db.promise().getConnection(); // Get a connection from the pool
+
+  try {
+    await connection.beginTransaction();
+
+    // Check if room exists and is locked by this user
+    const [rooms] = await connection.query(
+      `SELECT * FROM room 
+       WHERE number = ? 
+       AND status = 'Empty' 
+       AND lock_until > NOW() 
+       AND viewer_user_id = ? 
+       FOR UPDATE`,
+      [roomNumber, guest.id]
+    );
+    console.log(rooms);
+
+    if (!rooms || rooms.length === 0) {
+      throw new Error("Room not found or not available for booking");
+    }
+
+    const room = rooms[0];
+
+    // Check for overlapping bookings
+    const [existingBookings] = await connection.query(
+      `SELECT * FROM booking 
+       WHERE room_id = ? 
+       AND status = 'confirmed' 
+       AND ((from_date <= ? AND end_date >= ?) 
+       OR (from_date <= ? AND end_date >= ?))`,
+      [
+        room.id,
+        from_date,
+        from_date,
+        end_date.toISOString(),
+        end_date.toISOString(),
+      ]
+    );
+
+    if (existingBookings.length > 0) {
+      throw new Error("Room is not available for the selected dates");
+    }
+
+    // Extend lock for 15 minutes
+    const lockUntil = new Date(Date.now() + 15 * 60 * 1000);
+    await connection.query(
+      "UPDATE room SET lock_until = ? WHERE id = ?",
+      [lockUntil, room.id]
+    );
+
+    // Create booking
+    const [bookingResult] = await connection.query(
+      `INSERT INTO booking 
+       (guest_id, room_id, from_date, end_date, status, amount) 
+       VALUES (?, ?, ?, ?, 'pending', ?)`,
+      [
+        guest.id,
+        room.id,
+        new Date(from_date?.split("T")[0]),
+        new Date(end_date.toISOString().split("T")[0]),
+        room.cost * days,
+      ]
+    );
+
+    // Create Razorpay order
+    const orderRequest = await paymentInstance.orders.create({
+      amount: room.cost * days * 100, // Convert to paise
+      currency: "INR",
+      receipt: `booking_${bookingResult.insertId}`,
+      notes: {
+        booking_id: bookingResult.insertId,
+        room_id: room.id,
+        guest_id: guest.id,
+      },
+    });
+
+    // Store payment details
+    await connection.query(
+      `INSERT INTO payment 
+       (order_id, booking_id, cost, user_id, status) 
+       VALUES (?, ?, ?, ?, 'unverified')`,
+      [orderRequest.id, bookingResult.insertId, room?.cost * days, guest.id]
+    );
+
+    await connection.commit(); // Commit transaction
+
+    res.status(201).json({
+      message: "Booking initiated and payment order created",
+      data: {
+        orderId: orderRequest.id,
+        bookingId: bookingResult.insertId,
+        amount: room?.cost * days,
+        currency: "INR",
+        room: {
+          id: room.id,
+          number: room.number,
+          type: room.type,
+        },
+        booking: {
+          from_date: from_date,
+          end_date: end_date.toISOString(),
+          days: days,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error in booking process:", error);
+    await connection.rollback(); // Rollback transaction on error
+    res.status(400).json({
+      message: error.message || "Error processing booking request",
+    });
+  } finally {
+    connection.release(); // Release connection back to the pool
+  }
+});
 
 export default router;

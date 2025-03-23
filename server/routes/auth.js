@@ -8,6 +8,10 @@ import {
   verifyToken,
 } from "../helpers.js";
 import { isAdmin } from "../middleware.js";
+import jwt from "jsonwebtoken";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const router = express.Router();
 
@@ -102,6 +106,56 @@ router.post("/register-employee", isAdmin, (req, res) => {
 router.post("/logout", (req, res) => {
   res.clearCookie("token", cookieOptions);
   res.status(200).json({ message: "Logout successful" });
+});
+
+// Check auth status endpoint
+router.get("/check", async (req, res) => {
+  try {
+    // Get token from cookie
+    const token = req.cookies.token;
+    console.log(token);
+    if (!token) {
+      return res.status(401).json({
+        authenticated: false,
+        message: "No token found",
+      });
+    }
+
+    console.log(process.env.JWT_SECRET);
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Get user from database to ensure they still exist
+    const [users] = await db
+      .promise()
+      .query("SELECT * FROM guest WHERE id = ?", [decoded.id]);
+
+    if (!users || users.length === 0) {
+      return res.status(401).json({
+        authenticated: false,
+        message: "User not found",
+      });
+    }
+
+    const user = users[0];
+
+    // Send back user info
+    res.json({
+      authenticated: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+      },
+    });
+  } catch (error) {
+    // Token verification failed
+    console.error("Auth check error:", error);
+    res.status(401).json({
+      authenticated: false,
+      message: "Invalid token",
+    });
+  }
 });
 
 export default router;

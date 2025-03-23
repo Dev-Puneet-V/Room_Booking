@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hotel Room Booking Payment Test</title>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .container {
+        border: 1px solid #ccc;
+        padding: 20px;
+        border-radius: 8px;
+      }
+      .button {
+        background-color: #4caf50;
+        border: none;
+        color: white;
+        padding: 15px 32px;
+        text-align: center;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 16px;
+        margin: 4px 2px;
+        cursor: pointer;
+        border-radius: 4px;
+      }
+      .login-section {
+        margin-bottom: 20px;
+        padding: 20px;
+        background-color: #f5f5f5;
+        border-radius: 8px;
+      }
+      .input-group {
+        margin-bottom: 15px;
+      }
+      .input-group label {
+        display: block;
+        margin-bottom: 5px;
+      }
+      .input-group input {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      .test-card {
+        background-color: #f9f9f9;
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 4px;
+      }
+      #loginStatus {
+        margin-bottom: 10px;
+        font-weight: bold;
+      }
+      .error {
+        color: red;
+        margin: 10px 0;
+      }
+      .success {
+        color: green;
+        margin: 10px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Hotel Room Booking System</h1>
+
+      <!-- Login Section -->
+      <div class="login-section" id="loginSection">
+        <h2>Login</h2>
+        <div id="loginStatus"></div>
+        <div class="input-group">
+          <label for="email">Email:</label>
+          <input type="email" id="email" placeholder="Enter your email" />
+        </div>
+        <div class="input-group">
+          <label for="password">Password:</label>
+          <input
+            type="password"
+            id="password"
+            placeholder="Enter your password"
+          />
+        </div>
+        <button class="button" onclick="login()">Login</button>
+      </div>
+
+      <!-- Booking Section (Initially Hidden) -->
+      <div id="bookingSection" style="display: none">
+        <div class="test-card">
+          <h3>Test Card Details</h3>
+          <p><strong>Card Number:</strong> 4111 1111 1111 1111</p>
+          <p><strong>Expiry:</strong> Any future date (e.g., 12/25)</p>
+          <p><strong>CVV:</strong> Any 3 digits (e.g., 123)</p>
+          <p><strong>Success OTP:</strong> 1111</p>
+          <p><strong>Failure OTP:</strong> 1234</p>
+        </div>
+
+        <div id="bookingDetails" style="display: none">
+          <h3>Booking Details</h3>
+          <p><strong>Room Number:</strong> <span id="roomNumber"></span></p>
+          <p><strong>Amount:</strong> ₹<span id="amount"></span></p>
+          <p><strong>From Date:</strong> <span id="fromDate"></span></p>
+          <p><strong>Days:</strong> <span id="days"></span></p>
+        </div>
+
+        <button class="button" onclick="testBooking()">Test Book Now</button>
+        <button
+          class="button"
+          style="background-color: #f44336"
+          onclick="logout()"
+        >
+          Logout
+        </button>
+      </div>
+    </div>
+
+    <script>
+      // Check if user is already logged in
+      window.onload = function () {
+        checkLoginStatus();
+      };
+
+      function checkLoginStatus() {
+        const token = getCookie("token");
+        if (token) {
+          document.getElementById("loginSection").style.display = "none";
+          document.getElementById("bookingSection").style.display = "block";
+          document.getElementById("loginStatus").textContent =
+            "Logged in successfully";
+        } else {
+          document.getElementById("loginSection").style.display = "block";
+          document.getElementById("bookingSection").style.display = "none";
+          document.getElementById("loginStatus").textContent =
+            "Please login to continue";
+        }
+      }
+
+      async function login() {
+        const email = document.getElementById("email").value;
+        const password = document.getElementById("password").value;
+
+        try {
+          const response = await fetch(
+            "http://localhost:5000/api/v1/auth/login",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              credentials: "include", // Important for cookies
+              body: JSON.stringify({ email, password }),
+            }
+          );
+
+          const data = await response.json();
+
+          if (response.ok) {
+            document.getElementById("loginStatus").textContent =
+              "Logged in successfully";
+            document.getElementById("loginStatus").className = "success";
+            checkLoginStatus();
+          } else {
+            throw new Error(data.message || "Login failed");
+          }
+        } catch (error) {
+          document.getElementById("loginStatus").textContent = error.message;
+          document.getElementById("loginStatus").className = "error";
+        }
+      }
+
+      function logout() {
+        document.cookie =
+          "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+        checkLoginStatus();
+      }
+
+      async function testBooking() {
+        try {
+          const bookingData = {
+            from_date: new Date().toISOString().split("T")[0],
+            days: 2,
+            amount: 2000,
+          };
+
+          const bookingResponse = await fetch("/api/v1/room/101/book", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            credentials: "include", // Important for cookies
+            body: JSON.stringify(bookingData),
+          });
+
+          if (!bookingResponse.ok) {
+            const errorData = await bookingResponse.json();
+            throw new Error(errorData.message || "Failed to create booking");
+          }
+
+          const bookingResult = await bookingResponse.json();
+
+          if (!bookingResult.data?.orderId) {
+            throw new Error("Failed to create booking");
+          }
+
+          // Display booking details
+          document.getElementById("roomNumber").textContent =
+            bookingResult.data.room.number;
+          document.getElementById("amount").textContent =
+            bookingResult.data.amount;
+          document.getElementById("fromDate").textContent =
+            bookingResult.data.booking.from_date;
+          document.getElementById("days").textContent =
+            bookingResult.data.booking.days;
+          document.getElementById("bookingDetails").style.display = "block";
+
+          // Initialize Razorpay
+          const options = {
+            key: "rzp_test_r9x0083Lr1W1nI", // Replace with your key
+            amount: bookingResult.data.amount * 100,
+            currency: bookingResult.data.currency,
+            order_id: bookingResult.data.orderId,
+            name: "Hotel Room Booking",
+            description: `Room ${bookingResult.data.room.number} Booking`,
+            handler: function (response) {
+              alert(
+                "Payment successful! Payment ID: " +
+                  response.razorpay_payment_id
+              );
+            },
+            prefill: {
+              name: "Test User",
+              email: document.getElementById("email").value,
+              contact: "9999999999",
+            },
+            notes: {
+              booking_id: bookingResult.data.bookingId,
+            },
+            theme: {
+              color: "#4CAF50",
+            },
+          };
+
+          const razorpayInstance = new Razorpay(options);
+          razorpayInstance.open();
+        } catch (error) {
+          console.error("Error:", error);
+          alert("Error: " + error.message);
+        }
+      }
+
+      // Helper function to get cookie value
+      function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(";").shift();
+      }
+    </script>
+  </body>
+</html>
