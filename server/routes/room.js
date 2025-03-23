@@ -177,32 +177,56 @@ router.post("/:roomNumber/view", isGuest, async (req, res) => {
       }
       // If room is found, set the 5-minute lock
       const lockUntil = new Date(Date.now() + 5 * 60 * 1000);
-      const updateQuery = `UPDATE room SET lock_until = ? , viewer_user_id = ? WHERE number = ?`;
-      db.query(updateQuery, [lockUntil, guest.id, roomNumber], (updateErr) => {
-        if (updateErr) {
-          return res.status(500).json({ message: updateErr.message });
+      const updateQuery = `UPDATE room SET lock_until = ? , views = ?, viewer_user_id = ? WHERE number = ?`;
+      db.query(
+        updateQuery,
+        [lockUntil, result[0]?.views + 1, guest.id, roomNumber],
+        (updateErr) => {
+          if (updateErr) {
+            return res.status(500).json({ message: updateErr.message });
+          }
+          return res.status(200).json({
+            message: "Room found and locked",
+            data: {
+              ...result[0],
+              lock_until: lockUntil,
+              viewer_user_id: guest.id,
+              views: result[0]?.views + 1,
+              total_bookings: result[0]?.total_bookings,
+            },
+          });
         }
-        return res.status(200).json({
-          message: "Room found and locked",
-          data: {
-            ...result[0],
-            lock_until: lockUntil,
-            viewer_user_id: guest.id,
-          },
-        });
-      });
+      );
     });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
 });
 
-// 3. Initiate Booking/Payment Endpoint (15-minute lock)
-
-router.post("/:roomNumber/book", async (req, res) => {
-  const { roomNumber } = req.params;
-  const { guest_id, from_date, days, amount } = req.body;
-  const selectQuery = ``;
-});
+router
+  .patch("/:roomNumber/unlock", isGuest, async (req, res) => {
+    try {
+      const { roomNumber } = req.params;
+      const guest = req.user;
+      console.log(guest);
+      const updateQuery = `UPDATE room SET lock_until = NULL, viewer_user_id = NULL WHERE number = ? AND viewer_user_id = ?`;
+      db.query(updateQuery, [roomNumber, guest.id], (err, result) => {
+        if (err) return res.status(500).json({ message: err.message });
+        if (result.affectedRows === 0)
+          return res
+            .status(404)
+            .json({ message: "Room not found or not locked by the guest" });
+        return res.status(200).json({ message: "Room unlocked successfully" });
+      });
+    } catch (error) {
+      return res.status(500).json({ message: error.message });
+    }
+  })
+  // 3. Initiate Booking/Payment Endpoint (15-minute lock)
+  .post("/:roomNumber/book", async (req, res) => {
+    const { roomNumber } = req.params;
+    const { guest_id, from_date, days, amount } = req.body;
+    const selectQuery = ``;
+  });
 
 export default router;
