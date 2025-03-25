@@ -21,7 +21,7 @@ const __dirname = path.dirname(__filename);
 
 // CORS configuration
 const corsOptions = {
-  origin: "http://localhost:5173", // or your frontend domain
+  origin: ["http://localhost:5173", "https://room-booking-sc8r.onrender.com"], // or your frontend domain
   credentials: true, // Allow credentials (cookies)
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   allowedHeaders: ["Content-Type", "Authorization"],
