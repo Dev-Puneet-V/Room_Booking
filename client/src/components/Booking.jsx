@@ -113,6 +113,7 @@ const Booking = () => {
 
   // Prevent booking if user doesn't have the lock
   useEffect(() => {
+    console.log("HDJFJJD", room, room?.viewer_user_id, user?.id);
     if (room && room.viewer_user_id !== user?.id) {
       setError("You don't have access to book this room");
       setTimeout(() => navigate("/rooms"), 2000);
