@@ -10820,7 +10820,7 @@ const id = {
     typeof WorkerGlobalScope < "u" &&
     self instanceof WorkerGlobalScope &&
     typeof self.importScripts == "function",
-  Qv = (Qs && window.location.href) || "https://room-booking-sc8r.onrender.com",
+  Qv = (Qs && window.location.href) || "http:localhost",
   Kv = Object.freeze(
     Object.defineProperty(
       {
