@@ -212,8 +212,8 @@ VITE_RAZORPAY_KEY_ID=your_razorpay_key
 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/hotel-management.git
-cd hotel-management
+git clone https://github.com/Dev-Puneet-V/Room_Booking.git
+cd Room_Booking
 ```
 
 2. Start the application
@@ -285,7 +285,6 @@ npm run dev
    - Connection pooling
    - Transaction integrity
    - SQL injection prevention
-
 
 [Watch the video](https://www.loom.com/share/7e56a35ca2ce4f18b3d88e8a8e91baf5?sid=3db2575f-4656-4833-801b-6ec8fc1316f6)
 
