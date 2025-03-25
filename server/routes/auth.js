@@ -57,27 +57,43 @@ router.post("/login", async (req, res) => {
 });
 
 router.post("/register", async (req, res) => {
-  const { type, email, password } = req.body;
-  const hashedPassword = await hashPassword(password);
-  let query = `INSERT INTO guest (email, password) VALUES (?, ?);`;
-  let values = [email, hashedPassword];
+  try {
+    const { email, password } = req.body;
 
-  db.query(query, values, (err, result) => {
-    if (err) return res.status(500).json({ message: err.message });
+    // Check if email already exists
+    const [existingUsers] = await db
+      .promise()
+      .query("SELECT * FROM guest WHERE email = ?", [email]);
+
+    if (existingUsers.length > 0) {
+      return res.status(400).json({ message: "Email already registered" });
+    }
+
+    const hashedPassword = await hashPassword(password);
+    const query = `INSERT INTO guest (email, password) VALUES (?, ?);`;
+    const values = [email, hashedPassword]; // Use part of email as default name
+
+    const [result] = await db.promise().query(query, values);
+
     const token = generateToken({
       id: result.insertId,
-      type,
+      type: "guest",
       date: Date.now(),
     });
+
     res.cookie("token", token, cookieOptions);
     res.status(200).json({
       message: "Registration successful",
       data: {
         id: result.insertId,
         email,
+        type: "guest",
       },
     });
-  });
+  } catch (error) {
+    console.error("Registration error:", error);
+    res.status(500).json({ message: "Registration failed" });
+  }
 });
 
 router.post("/register-employee", isAdmin, (req, res) => {
@@ -113,7 +129,6 @@ router.get("/check", async (req, res) => {
   try {
     // Get token from cookie
     const token = req.cookies.token;
-    console.log(token);
     if (!token) {
       return res.status(401).json({
         authenticated: false,
@@ -121,23 +136,41 @@ router.get("/check", async (req, res) => {
       });
     }
 
-    console.log(process.env.JWT_SECRET);
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    let user;
 
-    // Get user from database to ensure they still exist
-    const [users] = await db
-      .promise()
-      .query("SELECT * FROM guest WHERE id = ?", [decoded.id]);
+    // Check based on user type
+    if (decoded.type === "admin") {
+      const [admins] = await db
+        .promise()
+        .query("SELECT * FROM admin WHERE id = ?", [decoded.id]);
 
-    if (!users || users.length === 0) {
+      if (!admins || admins.length === 0) {
+        return res.status(401).json({
+          authenticated: false,
+          message: "Admin not found",
+        });
+      }
+      user = admins[0];
+    } else if (decoded.type === "guest") {
+      const [guests] = await db
+        .promise()
+        .query("SELECT * FROM guest WHERE id = ?", [decoded.id]);
+
+      if (!guests || guests.length === 0) {
+        return res.status(401).json({
+          authenticated: false,
+          message: "Guest not found",
+        });
+      }
+      user = guests[0];
+    } else {
       return res.status(401).json({
         authenticated: false,
-        message: "User not found",
+        message: "Invalid user type",
       });
     }
-
-    const user = users[0];
 
     // Send back user info
     res.json({
@@ -145,7 +178,8 @@ router.get("/check", async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        role: user.role,
+        name: user.name,
+        type: decoded.type,
       },
     });
   } catch (error) {

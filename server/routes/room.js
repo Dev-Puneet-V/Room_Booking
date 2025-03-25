@@ -6,231 +6,264 @@ import crypto from "crypto";
 
 const router = express.Router();
 
-// Function to release expired locks
-const releaseExpiredLocks = async (connection) => {
+// Get all rooms (accessible to all authenticated users)
+router.get("/", async (req, res) => {
+  const connection = await db.promise().getConnection();
   try {
-    // Release locks that have expired and are not for occupied rooms
-    await db.query(
-      `UPDATE room 
-       SET lock_until = NULL, status = CASE 
-         WHEN status = 'Under maintenance' THEN 'Empty'
-         ELSE status 
-       END
-       WHERE lock_until IS NOT NULL 
-       AND lock_until < NOW() 
-       AND status != 'Occupied'`
+    const [rooms] = await connection.query(
+      "SELECT * FROM room ORDER BY number"
     );
+    res.json(rooms);
   } catch (error) {
-    console.error("Error releasing expired locks:", error);
+    console.error("Error fetching rooms:", error);
+    res.status(500).json({ message: "Failed to fetch rooms" });
+  } finally {
+    connection.release();
   }
-};
-
-router.post("/", isAdmin, (req, res) => {
-  const { number, type, cost, status, capacity, facilities } = req.body;
-
-  const query = `INSERT INTO room (number, type, cost, status, capacity, facilities) VALUES (?, ?, ?, ?, ?, ?)`;
-  const values = [number, type, cost, status, capacity, facilities];
-
-  db.query(query, values, (err, result) => {
-    if (err) return res.status(500).json({ message: err.message });
-    res.status(201).json({
-      message: "Room created successfully",
-      data: {
-        id: result.insertId,
-        number,
-        type,
-        cost,
-        status,
-        capacity,
-        facilities,
-      },
-    });
-  });
 });
 
-router.get("/:roomNumber", (req, res) => {
-  const { roomNumber } = req.params;
+// Create new room (admin only)
+router.post("/", isAdmin, async (req, res) => {
+  const { number, type, price, status, image_url } = req.body;
+  const connection = await db.promise().getConnection();
 
-  const query = `SELECT * FROM room WHERE number = ?`;
-  const values = [roomNumber];
+  try {
+    await connection.beginTransaction();
 
-  db.query(query, values, (err, result) => {
-    if (err) {
-      return res
-        .status(500)
-        .json({ message: "Database query error", error: err.message });
+    // Validate room type
+    const validRoomTypes = ["Single", "Double", "Suite", "Deluxe"];
+    if (!validRoomTypes.includes(type)) {
+      await connection.rollback();
+      return res.status(400).json({
+        message:
+          "Invalid room type. Must be one of: Single, Double, Suite, Deluxe",
+      });
     }
-    if (result.length === 0) {
-      return res.status(404).json({ message: "Room not found" });
+
+    // Check if room number already exists
+    const [existing] = await connection.query(
+      "SELECT number FROM room WHERE number = ?",
+      [number]
+    );
+
+    if (existing.length > 0) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Room number already exists" });
     }
-    res
-      .status(200)
-      .json({ message: "Room retrieved successfully", data: result[0] });
-  });
+
+    await connection.query(
+      "INSERT INTO room (number, type, cost, status, image) VALUES (?, ?, ?, ?, ?)",
+      [number, type, price, status || "Empty", image_url]
+    );
+
+    await connection.commit();
+    res.status(201).json({ message: "Room created successfully" });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error creating room:", error);
+    res.status(500).json({ message: "Failed to create room" });
+  } finally {
+    connection.release();
+  }
 });
 
-router.put("/:roomNumber", isAdmin, (req, res) => {
-  const { roomNumber } = req.params;
-  const { number, type, cost, status, capacity, facilities } = req.body;
+// Update room (admin only)
+router.put("/:number", isAdmin, async (req, res) => {
+  const { type, price, status, image_url } = req.body;
+  const { number } = req.params;
+  const connection = await db.promise().getConnection();
 
-  const fields = [];
-  const values = [];
+  try {
+    await connection.beginTransaction();
 
-  if (number) {
-    fields.push("number = ?");
-    values.push(number);
-  }
-  if (type) {
-    fields.push("type = ?");
-    values.push(type);
-  }
-  if (cost) {
-    fields.push("cost = ?");
-    values.push(cost);
-  }
-  if (status) {
-    fields.push("status = ?");
-    values.push(status);
-  }
-  if (capacity) {
-    fields.push("capacity = ?");
-    values.push(capacity);
-  }
-  if (facilities) {
-    fields.push("facilities = ?");
-    values.push(facilities);
-  }
-
-  if (fields.length === 0) {
-    return res.status(400).json({ message: "No fields to update" });
-  }
-
-  const query = `UPDATE room SET ${fields.join(", ")} WHERE number = ?`;
-  values.push(roomNumber);
-
-  db.query(query, values, (err, result) => {
-    if (err) {
-      return res
-        .status(500)
-        .json({ message: "Database update error", error: err.message });
+    // Validate room type
+    const validRoomTypes = ["Single", "Double", "Suite", "Deluxe"];
+    if (type && !validRoomTypes.includes(type)) {
+      await connection.rollback();
+      return res.status(400).json({
+        message:
+          "Invalid room type. Must be one of: Single, Double, Suite, Deluxe",
+      });
     }
-    if (result.affectedRows === 0) {
+
+    // Check if room exists
+    const [existing] = await connection.query(
+      "SELECT number FROM room WHERE number = ?",
+      [number]
+    );
+
+    if (existing.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ message: "Room not found" });
     }
 
-    const selectQuery = "SELECT * FROM room WHERE number = ?";
-    db.query(selectQuery, [number], (selectErr, selectResult) => {
-      if (selectErr) {
-        return res.status(500).json({
-          message: "Error retrieving updated room data",
-          error: selectErr.message,
-        });
-      }
-      res
-        .status(200)
-        .json({ message: "Room updated successfully", data: selectResult[0] });
-    });
-  });
+    await connection.query(
+      "UPDATE room SET type = ?, cost = ?, status = ?, image = ? WHERE number = ?",
+      [type, price, status, image_url, number]
+    );
+
+    await connection.commit();
+    res.json({ message: "Room updated successfully" });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error updating room:", error);
+    res.status(500).json({ message: "Failed to update room" });
+  } finally {
+    connection.release();
+  }
 });
 
-router.delete("/:roomNumber", isAdmin, (req, res) => {
-  const { roomNumber } = req.params;
+// Delete room (admin only)
+router.delete("/:number", isAdmin, async (req, res) => {
+  const { number } = req.params;
+  const connection = await db.promise().getConnection();
 
-  const query = `DELETE FROM room WHERE number = ?`;
-  const values = [roomNumber];
+  try {
+    await connection.beginTransaction();
 
-  db.query(query, values, (err, result) => {
-    if (err) {
-      return res
-        .status(500)
-        .json({ message: "Database delete error", error: err.message });
-    }
-    if (result.affectedRows === 0) {
+    // Check if room exists
+    const [existing] = await connection.query(
+      "SELECT id, number FROM room WHERE number = ?",
+      [number]
+    );
+
+    if (existing.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ message: "Room not found" });
     }
-    res.status(200).json({ message: "Room deleted successfully" });
-  });
+
+    // Check if room has any bookings
+    const [bookings] = await connection.query(
+      "SELECT id FROM booking WHERE room_id = ? AND status != 'Cancelled'",
+      [existing[0].id]
+    );
+
+    if (bookings.length > 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Cannot delete room with active bookings",
+      });
+    }
+
+    await connection.query("DELETE FROM room WHERE number = ?", [number]);
+
+    await connection.commit();
+    res.json({ message: "Room deleted successfully" });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error deleting room:", error);
+    res.status(500).json({ message: "Failed to delete room" });
+  } finally {
+    connection.release();
+  }
+});
+
+// Get single room details
+router.get("/:number", async (req, res) => {
+  const { number } = req.params;
+  const connection = await db.promise().getConnection();
+
+  try {
+    const [rooms] = await connection.query(
+      "SELECT * FROM room WHERE number = ?",
+      [number]
+    );
+
+    if (rooms.length === 0) {
+      return res.status(404).json({ message: "Room not found" });
+    }
+
+    res.json(rooms[0]);
+  } catch (error) {
+    console.error("Error fetching room:", error);
+    res.status(500).json({ message: "Failed to fetch room" });
+  } finally {
+    connection.release();
+  }
 });
 
 // 1. View/Lock Room Endpoint (5-minute lock)
 router.post("/:roomNumber/view", isGuest, async (req, res) => {
+  const connection = await db.promise().getConnection();
   try {
     const { roomNumber } = req.params;
     const guest = req.user;
-    //check if room is empty and not locked by other guest
-    const query1 = `SELECT * FROM room WHERE number = ? AND status = 'Empty' AND (lock_until IS NULL OR (lock_until > NOW() AND viewer_user_id = ?) OR lock_until < NOW())`;
-    const values = [roomNumber, guest.id];
-    db.query(query1, values, (err, result) => {
-      if (err) {
-        return res.status(500).json({ message: err.message });
-      }
-      if (result.length === 0) {
-        return res.status(404).json({ message: "Room not found" });
-      }
 
-      console.log(
-        new Date(result[0]?.lock_until).getTime() < Date.now(),
-        new Date(result[0]?.lock_until).getTime(),
-        Date.now()
-      );
-      if (
-        result[0]?.viewer_user_id === guest?.id &&
-        result[0]?.status === "Empty" &&
-        new Date(result[0]?.lock_until).getTime() > Date.now()
-      ) {
-        return res.status(200).json({
-          message: "Room found and locked",
-          data: {
-            ...result[0],
-          },
-        });
-      }
-      // If room is found, set the 5-minute lock
-      const lockUntil = new Date(Date.now() + 5 * 60 * 1000);
-      const updateQuery = `UPDATE room SET lock_until = ? , views = ?, viewer_user_id = ? WHERE number = ?`;
-      db.query(
-        updateQuery,
-        [lockUntil, result[0]?.views + 1, guest.id, roomNumber],
-        (updateErr) => {
-          if (updateErr) {
-            return res.status(500).json({ message: updateErr.message });
-          }
-          return res.status(200).json({
-            message: "Room found and locked",
-            data: {
-              ...result[0],
-              lock_until: lockUntil,
-              viewer_user_id: guest.id,
-              views: result[0]?.views + 1,
-              total_bookings: result[0]?.total_bookings,
-            },
-          });
-        }
-      );
+    // Check if room is empty and not locked by other guest
+    const [result] = await connection.query(
+      `SELECT * FROM room WHERE number = ? AND status = 'Empty' AND (lock_until IS NULL OR (lock_until > NOW() AND viewer_user_id = ?) OR lock_until < NOW())`,
+      [roomNumber, guest.id]
+    );
+
+    if (result.length === 0) {
+      return res.status(404).json({ message: "Room not found" });
+    }
+
+    if (
+      result[0]?.viewer_user_id === guest?.id &&
+      result[0]?.status === "Empty" &&
+      new Date(result[0]?.lock_until).getTime() > Date.now()
+    ) {
+      return res.status(200).json({
+        message: "Room found and locked",
+        data: {
+          ...result[0],
+        },
+      });
+    }
+
+    // If room is found, set the 5-minute lock
+    const lockUntil = new Date(Date.now() + 5 * 60 * 1000);
+    await connection.query(
+      `UPDATE room SET lock_until = ?, views = ?, viewer_user_id = ? WHERE number = ?`,
+      [lockUntil, result[0]?.views + 1, guest.id, roomNumber]
+    );
+
+    return res.status(200).json({
+      message: "Room found and locked",
+      data: {
+        ...result[0],
+        lock_until: lockUntil,
+        viewer_user_id: guest.id,
+        views: result[0]?.views + 1,
+        total_bookings: result[0]?.total_bookings,
+      },
     });
   } catch (error) {
+    console.error("Error viewing/locking room:", error);
     return res.status(500).json({ message: error.message });
+  } finally {
+    connection.release();
   }
 });
-//user comes -> views the room -> click on book now(check if room is available) -> if available then lock the room for 15 minutes -> if not available then return not available
-//
+
+// Unlock room
 router.patch("/:roomNumber/unlock", isGuest, async (req, res) => {
+  const connection = await db.promise().getConnection();
   try {
     const { roomNumber } = req.params;
     const guest = req.user;
-    const updateQuery = `UPDATE room SET lock_until = NULL, viewer_user_id = NULL WHERE number = ? AND viewer_user_id = ?`;
-    db.query(updateQuery, [roomNumber, guest.id], (err, result) => {
-      if (err) return res.status(500).json({ message: err.message });
-      if (result.affectedRows === 0)
-        return res
-          .status(404)
-          .json({ message: "Room not found or not locked by the guest" });
-      return res.status(200).json({ message: "Room unlocked successfully" });
-    });
+
+    const [result] = await connection.query(
+      `UPDATE room SET lock_until = NULL, viewer_user_id = NULL WHERE number = ? AND viewer_user_id = ?`,
+      [roomNumber, guest.id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        message: "Room not found or not locked by the guest",
+      });
+    }
+
+    return res.status(200).json({ message: "Room unlocked successfully" });
   } catch (error) {
+    console.error("Error unlocking room:", error);
     return res.status(500).json({ message: error.message });
+  } finally {
+    connection.release();
   }
 });
+
 // 3. Initiate Booking/Payment Endpoint (15-minute lock)
 router.post("/:roomNumber/book", isGuest, async (req, res) => {
   const { roomNumber } = req.params;
@@ -293,10 +326,10 @@ router.post("/:roomNumber/book", isGuest, async (req, res) => {
 
     // Extend lock for 15 minutes
     const lockUntil = new Date(Date.now() + 15 * 60 * 1000);
-    await connection.query(
-      "UPDATE room SET lock_until = ? WHERE id = ?",
-      [lockUntil, room.id]
-    );
+    await connection.query("UPDATE room SET lock_until = ? WHERE id = ?", [
+      lockUntil,
+      room.id,
+    ]);
 
     // Create booking
     const [bookingResult] = await connection.query(

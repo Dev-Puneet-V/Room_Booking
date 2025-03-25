@@ -76,7 +76,7 @@ router.post("/razorpay", async (req, res) => {
       // Update booking status
       await connection.query(
         "UPDATE booking SET status = 'confirmed', payment_id = ? WHERE id = ?",
-        [paymentRecord.booking_id, payment.entity.id]
+        [paymentRecord.id, paymentRecord.booking_id]
       );
 
       // Update room status
